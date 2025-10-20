@@ -39,19 +39,21 @@ application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 @app.post("/api/webhook")
 async def webhook(request: Request):
     """
-    Эта функция-вебхук принимает обновления от Telegram и обрабатывает их.
+    Эта функция-вебхук принимает обновления от Telegram, 
+    инициализирует приложение, обрабатывает обновление и корректно завершается.
     """
     # Декодируем полученные данные
     data = await request.json()
     
     # !!! КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: ИНИЦИАЛИЗАЦИЯ !!!
+    # Мы говорим приложению, что нужно подготовиться к работе.
     await application.initialize() 
     # !!! КОНЕЦ ИСПРАВЛЕНИЯ !!!
 
     update = Update.de_json(data, bot)
     await application.process_update(update)
     
-    # Теперь, когда логика обработана, мы можем его выключить
-    await application.shutdown() # Необязательно, но полезно для корректной работы в serverless-стиле
+    # Корректно завершаем приложение, освобождая ресурсы.
+    await application.shutdown() 
     
     return {"status": "ok"}
