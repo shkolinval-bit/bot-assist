@@ -67,4 +67,5 @@ def health_check():
     Эта функция нужна, чтобы мы могли проверить, что наш сервер вообще жив,
     просто зайдя на главный URL нашего проекта.
     """
-    return {"status": "Bot is alive!"}
+    # Новая версия для теста развертывания
+    return {"status": "Bot is alive! Version 2 DEPLOYED."}
