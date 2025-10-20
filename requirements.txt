@@ -2,3 +2,5 @@ python-telegram-bot
 fastapi
 uvicorn
 python-dotenv
+sqlalchemy
+psycopg2-binary # Драйвер для PostgreSQL
