@@ -1,4 +1,4 @@
-# Файл: api/index.py (ФИНАЛЬНАЯ РАБОЧАЯ ВЕРСИЯ v3.0 - РУСИФИЦИРОВАННАЯ)
+# Файл: api/index.py (ФИНАЛЬНАЯ РАБОЧАЯ ВЕРСИЯ v3.1 - РУСИФИЦИРОВАННАЯ)
 
 import os
 import httpx
@@ -11,7 +11,7 @@ from telegram.ext import (
 )
 from typing import Optional
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, Text
-from sqlalchemy.ext.asyncio import create_async_engine # <-- Используем асинхронный engine
+from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.exc import OperationalError
 
@@ -40,19 +40,11 @@ try:
     db_url_adapted = main_db_url.replace("postgres://", "postgresql+asyncpg://", 1)
     
     engine = create_async_engine(db_url_adapted)
-    # SessionLocal будет окончательно определен в startup_event
     
 except Exception as e:
     print(f"FATAL ERROR during initial setup: {e}")
     # (Аварийное оповещение на случай проблем с URL)
-    error_message = f"🔴 КРИТИЧЕСКАЯ ОШИБКА БОТА 🔴\n\nНе удалось создать engine для БД.\n\nОшибка: {e}"
-    if TELEGRAM_TOKEN and ADMIN_CHAT_ID:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": ADMIN_CHAT_ID, "text": error_message}
-        try:
-            httpx.post(url, json=payload)
-        except Exception as http_e:
-            print(f"ERROR: Не удалось отправить аварийное сообщение: {http_e}")
+    # ...
 
 # --- МОДЕЛИ ДАННЫХ ---
 class Settings(Base):
@@ -79,7 +71,7 @@ except Exception as e:
 
 app = FastAPI()
 
-# --- ФИНАЛЬНОЕ ИСПРАВЛЕНИЕ: Асинхронное создание таблиц при старте FastAPI ---
+# --- Асинхронное создание таблиц при старте FastAPI ---
 @app.on_event("startup")
 async def startup_event():
     global SessionLocal
@@ -97,10 +89,13 @@ async def startup_event():
         SessionLocal = None
         error_trace = traceback.format_exc()
         error_message = f"🔴 КРИТИЧЕСКАЯ ОШИБКА БОТА 🔴\n\nНе удалось создать таблицы в БД.\n\nОшибка: {e}\n\nТрассировка:\n{error_trace}"
+        
+        # --- ИСПРАВЛЕНИЕ: Делаем отправку уведомления асинхронной ---
         if TELEGRAM_TOKEN and ADMIN_CHAT_ID:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
             payload = {"chat_id": ADMIN_CHAT_ID, "text": error_message[:4096]}
-            httpx.post(url, json=payload)
+            async with httpx.AsyncClient() as client:
+                await client.post(url, json=payload)
 
 
 # --- ФУНКЦИИ-ПОМОЩНИКИ ---
