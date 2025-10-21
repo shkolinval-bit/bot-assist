@@ -153,6 +153,7 @@ async def webhook(request: Request):
     data = await request.json()
     
     update = Update.de_json(data, bot)
+    # !!! КРИТИЧЕСКИЙ ФИКС: Используем dp вместо application !!!
     await dp.process_update(update) 
     
     return {"status": "ok"}
