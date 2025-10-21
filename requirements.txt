@@ -8,3 +8,4 @@ asyncpg   # <--- НОВЫЙ АСИНХРОННЫЙ ДРАЙВЕР
 transformers
 torch
 google-genai
+psycopg2-binary
