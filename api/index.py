@@ -1,25 +1,24 @@
-# Файл: api/index.py (ФИНАЛЬНАЯ РАБОЧАЯ ВЕРСИЯ)
+# Файл: api/index.py (ФИНАЛЬНАЯ АСИНХРОННАЯ ВЕРСИЯ - ИСПРАВЛЕНО)
 
 import os
+import asyncio
 from fastapi import FastAPI, Request
 from telegram import Update, Bot
-# !!! ФИКС: Используем Dispatcher, который решает проблему с RuntimeError !!!
 from telegram.ext import Dispatcher, CommandHandler, MessageHandler, filters, ContextTypes
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, Text
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession # АСИНХРОННЫЙ ИМПОРТ
+from sqlalchemy import Column, Integer, String, Boolean, Text, select
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.exc import OperationalError
 
-# --- 1. CONFIGURATION (READ FROM RENDER ENVIRONMENT) ---
+# --- 1. CONFIGURATION ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 DATABASE_URL = os.getenv("DATABASE_URL") 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
 
-
-# --- 2. ИНИЦИАЛИЗАЦИЯ НЕЙРОСЕТИ (ГИБРИДНАЯ СИСТЕМА) ---
+# --- 2. ИНИЦИАЛИЗАЦИЯ НЕЙРОСЕТИ ---
 try:
     from transformers import pipeline
-    # Zero-Shot для быстрой классификации спама, токсичности и рекламы
     text_classifier = pipeline(
         "zero-shot-classification",
         model="s-nlp/ru-mtl-zero-shot-public"
@@ -30,7 +29,7 @@ except Exception as e:
     text_classifier = None
 
 
-# --- 3. DATABASE SETUP (SQLAlchemy) ---
+# --- 3. DATABASE SETUP (АСИНХРОННО) ---
 Base = declarative_base() 
 class Settings(Base):
     __tablename__ = 'settings'
@@ -45,34 +44,38 @@ class FAQ(Base):
     response_text = Column(Text, nullable=False)
     enabled = Column(Boolean, default=True)
 
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# !!! КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: АСИНХРОННЫЙ ДВИЖОК !!!
+# Замена 'postgresql://' на 'postgresql+asyncpg://' для асинхронной работы
+if DATABASE_URL:
+    ASYNC_DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
+else:
+    ASYNC_DATABASE_URL = None # Для безопасного запуска
+    
+async_engine = create_async_engine(ASYNC_DATABASE_URL)
+AsyncSessionLocal = sessionmaker(async_engine, expire_on_commit=False, class_=AsyncSession)
 
 
-# --- 4. BOT & APP INITIALIZATION (ФИКС ОШИБКИ) ---
+# --- 4. BOT & APP INITIALIZATION ---
 bot = Bot(token=TELEGRAM_TOKEN)
-# !!! ФИКС: Создаем Диспетчер, который готов к работе сразу !!!
 dp = Dispatcher(bot, None) 
 app = FastAPI()
 
 
 # --- 5. ФУНКЦИЯ: АНАЛИЗ СПАМА ЧЕРЕЗ GEMINI (LLM) ---
+# ... (Этот код не меняется) ...
 async def analyze_for_scam(text_to_analyze: str) -> bool:
-    """Отправляет текст в Gemini API для глубокого анализа мошенничества."""
     if not GEMINI_API_KEY:
         return False
         
     try:
         from google import genai
         client = genai.Client(api_key=GEMINI_API_KEY)
-        
         prompt = (
             "Ты — строгий модератор. Проанализируй сообщение. "
             "Если оно является явным финансовым спамом, мошенническим предложением о работе, "
             "или фишингом, ответь ТОЛЬКО одним словом: ДА. В противном случае ответь ТОЛЬКО одним словом: НЕТ.\n\n"
             f"Сообщение: \"{text_to_analyze}\""
         )
-        
         response = await client.models.generate_content(
             model='gemini-2.5-flash',
             contents=prompt
@@ -88,21 +91,22 @@ async def analyze_for_scam(text_to_analyze: str) -> bool:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик /start."""
-    db = SessionLocal()
-    try:
-        welcome_setting = db.query(Settings).filter_by(setting_key='welcome_text').first()
-        welcome_text = welcome_setting.setting_value if welcome_setting else "🎉 Привет! Бот запущен, БД подключена. Настроек пока нет, но мы готовы!"
-    except OperationalError:
-        welcome_text = "⚠️ Ошибка подключения к базе данных! Проверьте DATABASE_URL."
-    finally:
-        db.close()
+    
+    async with AsyncSessionLocal() as db: # АСИНХРОННАЯ СЕССИЯ
+        try:
+            # Асинхронный запрос к БД
+            result = await db.execute(select(Settings).where(Settings.setting_key == 'welcome_text'))
+            welcome_setting = result.scalars().first()
+            welcome_text = welcome_setting.setting_value if welcome_setting else "🎉 Привет! Асинхронная БД подключена. Мы стабильны!"
+        except OperationalError:
+            welcome_text = "⚠️ Ошибка подключения к базе данных! Проверьте DATABASE_URL."
     
     await update.message.reply_text(welcome_text)
     
     try:
         await context.bot.send_message(
             chat_id=ADMIN_CHAT_ID, 
-            text=f"Бот успешно запущен. Пользователь {update.effective_user.name} ввел команду /start."
+            text=f"Бот запущен. Пользователь {update.effective_user.name} ввел команду /start."
         )
     except Exception as e:
         print(f"ОШИБКА УВЕДОМЛЕНИЯ АДМИНА: {e}")
@@ -112,14 +116,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Основной обработчик: 1. Gemini, 2. Zero-Shot, 3. Ответ."""
     message_text = update.message.text
     
-    # 1. МОДУЛЬ GEMINI (Глубокая проверка)
+    # 1. МОДУЛЬ GEMINI
     if await analyze_for_scam(message_text):
         await update.message.delete()
         warning = "❌ Сообщение удалено AI (Gemini). Причина: Обнаружено мошенничество/спам."
         await context.bot.send_message(chat_id=update.effective_chat.id, text=warning)
         return
         
-    # 2. МОДУЛЬ ZERO-SHOT (Базовая проверка на токсичность/рекламу)
+    # 2. МОДУЛЬ ZERO-SHOT
     if text_classifier:
         candidate_labels = ["токсичность", "предложение работы", "реклама", "финансовый спам"]
         results = text_classifier(message_text, candidate_labels, multi_label=True)
@@ -137,7 +141,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # --- 7. REGISTER HANDLERS ---
-# !!! ФИКС: Регистрируем обработчики через dp !!!
 dp.add_handler(CommandHandler("start", start))
 dp.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)) 
 
@@ -150,7 +153,7 @@ async def webhook(request: Request):
     data = await request.json()
     
     update = Update.de_json(data, bot)
-    await dp.process_update(update) # Прямая передача в Dispatcher
+    await dp.process_update(update) 
     
     return {"status": "ok"}
 
