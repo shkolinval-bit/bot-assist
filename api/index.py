@@ -1,7 +1,7 @@
-# Файл: api/index.py (ЛЕГКАЯ ВЕРСИЯ ДЛЯ VERCEL v21+)
+# Файл: api/index.py (Версия для Vercel + Supabase Integration)
 
 import os
-import httpx  # --- ИЗМЕНЕНИЕ: Используем httpx для асинхронных API-запросов ---
+import httpx
 from fastapi import FastAPI, Request
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -16,24 +16,21 @@ from sqlalchemy.exc import OperationalError
 # --- 1. CONFIGURATION ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
-DATABASE_URL = os.getenv("DATABASE_URL")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-# --- ИЗМЕНЕНИЕ: Добавляем токен для Hugging Face ---
 HUGGING_FACE_TOKEN = os.getenv("HUGGING_FACE_TOKEN")
+
+# --- ИЗМЕНЕНИЕ: Ищем переменную, которую создает интеграция Vercel + Supabase ---
+DATABASE_URL = os.getenv("POSTGRES_PRISMA_URL")
+
 HUGGING_FACE_MODEL_URL = "https://api-inference.huggingface.co/models/MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-fein-tuned"
 
 # Константы для логики и состояний
 MOD_THRESHOLD_DEFAULT = 0.85
 STATE_AWAITING_NEW_THRESHOLD = 'AWAITING_NEW_THRESHOLD'
 
-# --- 2. ИНИЦИАЛИЗАЦИЯ НЕЙРОСЕТИ -> ЗАМЕНЕНА НА API-КЛИЕНТ ---
-# Локальный классификатор удален для совместимости с Vercel
 
+# --- 2. API-КЛИЕНТ ДЛЯ МОДЕРАЦИИ ---
 async def classify_text_huggingface(text: str, labels: list) -> Optional[dict]:
-    """
-    --- ИЗМЕНЕНИЕ: Новая функция для классификации текста через Hugging Face API. ---
-    Отправляет текст на API и возвращает результат в формате, похожем на старый pipeline.
-    """
     if not HUGGING_FACE_TOKEN:
         print("WARNING: Hugging Face token not configured.")
         return None
@@ -74,29 +71,17 @@ class FAQ(Base):
 
 SessionLocal = None
 try:
-    # --- ОТЛАДОЧНЫЙ КОД ---
-    db_url_from_env = os.getenv("DATABASE_URL")
-    print(f"DEBUG: Проверяю переменную окружения DATABASE_URL.")
-    if not db_url_from_env:
-        raise ValueError("Переменная DATABASE_URL не найдена! Проверьте настройки Vercel.")
-    print(f"DEBUG: Переменная DATABASE_URL найдена.")
-    # --- КОНЕЦ ОТЛАДОЧНОГО КОДА ---
+    if not DATABASE_URL:
+        raise ValueError("Переменная POSTGRES_PRISMA_URL не найдена в окружении Vercel!")
 
-    # Адаптация строки подключения для Vercel Postgres и asyncpg
-    if "postgres://" in db_url_from_env:
-        db_url_adapted = db_url_from_env.replace("postgres://", "postgresql+asyncpg://", 1)
-        engine = create_engine(db_url_adapted)
-        print(f"DEBUG: Engine создан с драйвером asyncpg.")
-    else:
-        # Этот блок на всякий случай, если формат URL другой
-        engine = create_engine(db_url_from_env)
-        print(f"DEBUG: Engine создан со стандартным драйвером.")
+    # Адаптация строки подключения для asyncpg
+    db_url_adapted = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+    engine = create_engine(db_url_adapted)
 
     Base.metadata.create_all(bind=engine)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     print("INFO: База данных успешно настроена и таблицы созданы/проверены.")
 except Exception as e:
-    # Эта ошибка теперь будет более информативной
     print(f"FATAL ERROR: Критическая ошибка настройки базы данных: {e}. SessionLocal не инициализирован.")
     SessionLocal = None
 
@@ -134,7 +119,6 @@ async def analyze_for_scam(text_to_analyze: str) -> bool:
     if not GEMINI_API_KEY: return False
     try:
         from google import genai
-        # --- ИЗМЕНЕНИЕ: Упрощенная инициализация ---
         genai.configure(api_key=GEMINI_API_KEY)
         model = genai.GenerativeModel('gemini-pro')
         prompt = (
@@ -199,6 +183,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"ОШИБКА УВЕДОМЛЕНИЯ АДМИНА: {e}")
 
+# ... (остальные хендлеры add_faq, handle_mention, handle_message, admin_menu и т.д. остаются без изменений) ...
 async def add_faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id) != ADMIN_CHAT_ID:
         await update.message.reply_text("⛔️ Эта команда доступна только администратору.")
@@ -244,14 +229,12 @@ async def handle_mention(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_text = update.message.text
 
-    # 1. МОДУЛЬ GEMINI (Глубокая проверка)
     if await analyze_for_scam(message_text):
         await update.message.delete()
         warning = "❌ Сообщение удалено AI (Gemini). Причина: Обнаружено мошенничество/спам."
         await context.bot.send_message(chat_id=update.effective_chat.id, text=warning)
         return
 
-    # 2. --- ИЗМЕНЕНИЕ: МОДУЛЬ ZERO-SHOT через API ---
     mod_threshold = MOD_THRESHOLD_DEFAULT
     if SessionLocal:
         db = SessionLocal()
@@ -273,17 +256,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=update.effective_chat.id, text=warning)
             return
 
-    # 3. ТРИГГЕРНЫЙ ПОИСК (FAQ)
     faq_answer = await find_faq_response(message_text)
     if faq_answer:
         await update.message.reply_text(faq_answer)
         return
-
-    # 4. Базовый ответ (если все проверки пройдены)
-    # await update.message.reply_text(f"Я получил твое сообщение: '{message_text}'") # Можно отключить для тишины
-
-
-# --- АДМИН-МЕНЮ ХЕНДЛЕРЫ (без изменений) ---
 
 async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id) != ADMIN_CHAT_ID:
