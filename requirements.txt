@@ -3,7 +3,8 @@ fastapi
 uvicorn
 python-dotenv
 sqlalchemy
-psycopg2-binary
+# Удаляем psycopg2-binary
+asyncpg   # <--- НОВЫЙ АСИНХРОННЫЙ ДРАЙВЕР
 transformers
 torch
-google-genai # <--- НОВАЯ БИБЛИОТЕКА
+google-genai
