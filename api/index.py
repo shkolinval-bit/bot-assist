@@ -74,18 +74,30 @@ class FAQ(Base):
 
 SessionLocal = None
 try:
-    # --- ИЗМЕНЕНИЕ: Адаптация строки подключения для Vercel Postgres и asyncpg ---
-    if DATABASE_URL and "postgres://" in DATABASE_URL:
-        db_url_adapted = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+    # --- ОТЛАДОЧНЫЙ КОД ---
+    db_url_from_env = os.getenv("DATABASE_URL")
+    print(f"DEBUG: Проверяю переменную окружения DATABASE_URL.")
+    if not db_url_from_env:
+        raise ValueError("Переменная DATABASE_URL не найдена! Проверьте настройки Vercel.")
+    print(f"DEBUG: Переменная DATABASE_URL найдена.")
+    # --- КОНЕЦ ОТЛАДОЧНОГО КОДА ---
+
+    # Адаптация строки подключения для Vercel Postgres и asyncpg
+    if "postgres://" in db_url_from_env:
+        db_url_adapted = db_url_from_env.replace("postgres://", "postgresql+asyncpg://", 1)
         engine = create_engine(db_url_adapted)
+        print(f"DEBUG: Engine создан с драйвером asyncpg.")
     else:
-        engine = create_engine(DATABASE_URL)
+        # Этот блок на всякий случай, если формат URL другой
+        engine = create_engine(db_url_from_env)
+        print(f"DEBUG: Engine создан со стандартным драйвером.")
 
     Base.metadata.create_all(bind=engine)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    print("INFO: База данных настроена и таблицы созданы/проверены.")
+    print("INFO: База данных успешно настроена и таблицы созданы/проверены.")
 except Exception as e:
-    print(f"ERROR: Ошибка настройки базы данных: {e}. SessionLocal не инициализирован.")
+    # Эта ошибка теперь будет более информативной
+    print(f"FATAL ERROR: Критическая ошибка настройки базы данных: {e}. SessionLocal не инициализирован.")
     SessionLocal = None
 
 
