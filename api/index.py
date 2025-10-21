@@ -1,4 +1,4 @@
-# Файл: api/index.py (ФИНАЛЬНАЯ РАБОЧАЯ ВЕРСИЯ v8.0 - Stateless)
+# Файл: api/index.py (ФИНАЛЬНАЯ РАБОЧАЯ ВЕРСИЯ v9.0 - Упрощенная)
 
 import os
 import httpx
@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from telegram import Update, Bot
 from telegram.ext import Application, ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from typing import Optional
-from sqlalchemy import Column, Integer, String, Boolean, Text, select, inspect
+from sqlalchemy import Column, Integer, String, Boolean, Text, select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 
@@ -25,9 +25,13 @@ try:
         raise ValueError("Переменная окружения POSTGRES_PRISMA_URL не найдена!")
     main_db_url = DATABASE_URL.split('?')[0]
     db_url_adapted = main_db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    
     engine = create_async_engine(db_url_adapted)
+    AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    
+    print("INFO: Engine и SessionLocal успешно созданы.")
 except Exception as e:
-    print(f"FATAL ERROR during initial engine setup: {e}")
+    print(f"FATAL ERROR during engine setup: {e}")
 
 # --- МОДЕЛИ ДАННЫХ ---
 class Settings(Base):
@@ -46,25 +50,7 @@ class FAQ(Base):
 # --- ИНИЦИАЛИЗАЦИЯ FastAPI ---
 app = FastAPI()
 
-@app.on_event("startup")
-async def startup_event():
-    global AsyncSessionLocal
-    if engine is None:
-        print("Engine не был инициализирован, создание таблиц пропущено.")
-        return
-    try:
-        async with engine.connect() as conn:
-            inspector = inspect(conn)
-            required_tables = {"settings", "faq"}
-            existing_tables = await conn.run_sync(inspector.get_table_names)
-            if not required_tables.issubset(existing_tables):
-                async with engine.begin() as tx_conn:
-                    await tx_conn.run_sync(Base.metadata.create_all)
-        AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-        print("INFO: Настройка базы данных завершена успешно.")
-    except Exception as e:
-        AsyncSessionLocal = None
-        print(f"FATAL ERROR during table creation: {e}")
+# БЛОК @app.on_event("startup") ПОЛНОСТЬЮ УДАЛЕН, ТАК КАК ТАБЛИЦЫ УЖЕ СОЗДАНЫ ВРУЧНУЮ
 
 # --- АСИНХРОННЫЕ ФУНКЦИИ-ПОМОЩНИКИ ---
 async def get_db_setting(session: AsyncSession, key: str, default: str) -> str:
@@ -75,11 +61,11 @@ async def get_db_setting(session: AsyncSession, key: str, default: str) -> str:
 # --- HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if AsyncSessionLocal is None:
-        await update.message.reply_text("⚠️ Критическая ошибка конфигурации. Engine не создан.")
+        await update.message.reply_text("⚠️ Критическая ошибка конфигурации. AsyncSessionLocal не создан.")
         return
     try:
         async with AsyncSessionLocal() as session:
-            welcome_text = await get_db_setting(session, 'welcome_text', "Проверка...")
+            welcome_text = await get_db_setting(session, 'welcome_text', "Ошибка: не удалось прочитать приветственное сообщение.")
         await update.message.reply_text(welcome_text)
     except Exception as e:
         print(f"ERROR in /start handler: {e}")
@@ -91,10 +77,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- WEB SERVER ENDPOINTS ---
 @app.post("/api/webhook")
 async def webhook(request: Request):
-    # --- ИЗМЕНЕНИЕ: Создаем Application и регистрируем хендлеры ВНУТРИ вебхука ---
+    # Создаем Application и регистрируем хендлеры ВНУТРИ вебхука для stateless работы
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     
-    # Регистрация хендлеров
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
@@ -113,4 +98,4 @@ async def webhook(request: Request):
 
 @app.get("/")
 def health_check():
-    return {"status": "Бот жив. Версия v8.0 (Stateless)."}
+    return {"status": "Бот жив. Версия v9.0 (Упрощенная)."}
