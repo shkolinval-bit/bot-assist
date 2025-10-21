@@ -1,8 +1,9 @@
-# Файл: api/index.py (ФИНАЛЬНАЯ СТАБИЛЬНАЯ ВЕРСИЯ С GEMINI)
+# Файл: api/index.py (ФИНАЛЬНАЯ РАБОЧАЯ ВЕРСИЯ)
 
 import os
 from fastapi import FastAPI, Request
 from telegram import Update, Bot
+# !!! ФИКС: Используем Dispatcher, который решает проблему с RuntimeError !!!
 from telegram.ext import Dispatcher, CommandHandler, MessageHandler, filters, ContextTypes
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, Text
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -12,13 +13,13 @@ from sqlalchemy.exc import OperationalError
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 DATABASE_URL = os.getenv("DATABASE_URL") 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") # <--- Ключ для LLM
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
 
 
-# --- 2. ИНИЦИАЛИЗАЦИЯ НЕЙРОСЕТИ (Toxicity) ---
+# --- 2. ИНИЦИАЛИЗАЦИЯ НЕЙРОСЕТИ (ГИБРИДНАЯ СИСТЕМА) ---
 try:
-    # Оставляем Zero-Shot для базовой модерации (бесплатный, быстрый уровень)
     from transformers import pipeline
+    # Zero-Shot для быстрой классификации спама, токсичности и рекламы
     text_classifier = pipeline(
         "zero-shot-classification",
         model="s-nlp/ru-mtl-zero-shot-public"
@@ -50,16 +51,15 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # --- 4. BOT & APP INITIALIZATION (ФИКС ОШИБКИ) ---
 bot = Bot(token=TELEGRAM_TOKEN)
-# !!! ФИКС: Используем Dispatcher, чтобы избежать RuntimeError !!!
+# !!! ФИКС: Создаем Диспетчер, который готов к работе сразу !!!
 dp = Dispatcher(bot, None) 
 app = FastAPI()
 
 
-# --- 5. НОВАЯ ФУНКЦИЯ: АНАЛИЗ СПАМА ЧЕРЕЗ GEMINI ---
+# --- 5. ФУНКЦИЯ: АНАЛИЗ СПАМА ЧЕРЕЗ GEMINI (LLM) ---
 async def analyze_for_scam(text_to_analyze: str) -> bool:
-    """Отправляет текст в Gemini API для классификации мошенничества."""
+    """Отправляет текст в Gemini API для глубокого анализа мошенничества."""
     if not GEMINI_API_KEY:
-        print("WARNING: GEMINI_API_KEY не установлен. Пропускаю проверку LLM.")
         return False
         
     try:
@@ -67,18 +67,16 @@ async def analyze_for_scam(text_to_analyze: str) -> bool:
         client = genai.Client(api_key=GEMINI_API_KEY)
         
         prompt = (
-            "Ты — строгий модератор. Проанализируй следующее сообщение. "
+            "Ты — строгий модератор. Проанализируй сообщение. "
             "Если оно является явным финансовым спамом, мошенническим предложением о работе, "
             "или фишингом, ответь ТОЛЬКО одним словом: ДА. В противном случае ответь ТОЛЬКО одним словом: НЕТ.\n\n"
             f"Сообщение: \"{text_to_analyze}\""
         )
         
-        # Используем асинхронный вызов LLM
         response = await client.models.generate_content(
             model='gemini-2.5-flash',
             contents=prompt
         )
-        
         return response.text.strip().upper() == 'ДА'
         
     except Exception as e:
@@ -90,8 +88,6 @@ async def analyze_for_scam(text_to_analyze: str) -> bool:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик /start."""
-    # (Логика с БД для получения приветствия)
-    # ... (код start опущен для краткости, он остался таким же) ...
     db = SessionLocal()
     try:
         welcome_setting = db.query(Settings).filter_by(setting_key='welcome_text').first()
@@ -116,27 +112,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Основной обработчик: 1. Gemini, 2. Zero-Shot, 3. Ответ."""
     message_text = update.message.text
     
-    # 1. МОДУЛЬ GEMINI (Глубокая проверка на спам/работу)
+    # 1. МОДУЛЬ GEMINI (Глубокая проверка)
     if await analyze_for_scam(message_text):
         await update.message.delete()
         warning = "❌ Сообщение удалено AI (Gemini). Причина: Обнаружено мошенничество/спам."
         await context.bot.send_message(chat_id=update.effective_chat.id, text=warning)
         return
-
+        
     # 2. МОДУЛЬ ZERO-SHOT (Базовая проверка на токсичность/рекламу)
     if text_classifier:
-        candidate_labels = ["финансовый спам", "предложение работы", "мошенничество", "токсичность"]
+        candidate_labels = ["токсичность", "предложение работы", "реклама", "финансовый спам"]
         results = text_classifier(message_text, candidate_labels, multi_label=True)
         best_label = results['labels'][0]
         best_score = results['scores'][0]
         
-        if (best_label in ["токсичность", "предложение работы"]) and best_score > 0.85:
+        if (best_label in ["токсичность", "реклама"]) and best_score > 0.85:
             await update.message.delete()
             warning = f"❌ Сообщение удалено AI. Причина: {best_label} (Уверенность: {best_score:.2%})."
             await context.bot.send_message(chat_id=update.effective_chat.id, text=warning)
             return
 
-    # 3. Базовый ответ (если модерация пройдена)
+    # 3. Базовый ответ
     await update.message.reply_text(f"Я получил твое сообщение: '{message_text}'")
 
 
