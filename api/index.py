@@ -98,14 +98,18 @@ application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_m
 
 @app.post("/api/webhook")
 async def webhook(request: Request):
+    """
+    Стабилизированная функция webhook. 
+    Убрана лишняя инициализация, чтобы избежать конфликта с Render.
+    """
     data = await request.json()
     
-    await application.initialize() 
-
+    # Мы не будем вызывать initialize/shutdown, чтобы не мешать Render
+    # Это сделает код более стабильным на данной платформе
+    
+    # Напрямую передаем данные
     update = Update.de_json(data, bot)
     await application.process_update(update)
-    
-    await application.shutdown() 
     
     return {"status": "ok"}
 
