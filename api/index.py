@@ -1,17 +1,16 @@
-# Файл: api/index.py (Новая версия с подключением к БД)
+# Файл: api/index.py
 
 import os
 import asyncio
 from fastapi import FastAPI, Request
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, Text
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-# --- НАСТРОЙКИ ---
+# --- НАСТРОЙКИ (Берутся из переменных окружения Render) ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
-# Новая переменная для подключения к БД
 DATABASE_URL = os.getenv("DATABASE_URL") 
 
 
@@ -19,63 +18,83 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Объявляем базовый класс для моделей
 Base = declarative_base() 
-# Создаем модель для хранения настроек (Пока что только один пример)
+
+# Создаем модель для таблицы settings (должна быть создана SQL-кодом)
 class Settings(Base):
     __tablename__ = 'settings'
     id = Column(Integer, primary_key=True)
-    setting_key = Column(String, unique=True) # Ключ настройки (e.g., 'welcome_text')
-    setting_value = Column(String)            # Значение (e.g., 'Приветственный текст')
+    setting_key = Column(String, unique=True)
+    setting_value = Column(Text)
 
-# Создание движка и сессии (будет работать только если DATABASE_URL установлен)
+# Создаем модель для таблицы faq (должна быть создана SQL-кодом)
+class FAQ(Base):
+    __tablename__ = 'faq'
+    id = Column(Integer, primary_key=True)
+    keywords = Column(Text, nullable=False)
+    response_text = Column(Text, nullable=False)
+    enabled = Column(Boolean, default=True)
+
+
+# Создание движка и сессии (подключение к Supabase)
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Функция для создания таблиц (вызывается при старте)
-def initialize_db():
-    Base.metadata.create_all(bind=engine)
 
 # --- ИНИЦИАЛИЗАЦИЯ БОТА ---
 bot = Bot(token=TELEGRAM_TOKEN)
 application = Application.builder().bot(bot).build()
 app = FastAPI()
 
+
 # --- ЛОГИКА ОБРАБОТЧИКОВ ---
 
 # Обработчик команды /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Теперь мы будем читать данные из БД (пример)
+    """
+    Отправляет приветственное сообщение и уведомление админу.
+    (Теперь без кода, который падал, так как ADMIN_CHAT_ID теперь число!)
+    """
     db = SessionLocal()
     try:
-        welcome_text = db.query(Settings).filter_by(setting_key='welcome_text').first()
-        text_to_send = welcome_text.setting_value if welcome_text else "Привет! Это приветствие по умолчанию."
+        # Пример чтения из БД
+        welcome_setting = db.query(Settings).filter_by(setting_key='welcome_text').first()
+        welcome_text = welcome_setting.setting_value if welcome_setting else "Привет! Я бот-модератор. База данных подключена и ждет настроек!"
     finally:
         db.close()
-        
-    await update.message.reply_text(text_to_send)
     
-    # Этот блок все еще вызовет 500 ошибку, если ADMIN_CHAT_ID не число!
-    # Если вы хотите, чтобы бот работал без сбоев, пока не настроите админ-чат, 
-    # держите его закомментированным, или убедитесь, что ADMIN_CHAT_ID — это ТОЛЬКО ЦИФРЫ.
-    # await context.bot.send_message(
-    #     chat_id=ADMIN_CHAT_ID,
-    #     text=f"Бот запущен. Пользователь {update.effective_user.name} ввел команду /start."
-    # )
+    await update.message.reply_text(welcome_text)
+    
+    # Отправка уведомления администратору (ВКЛЮЧЕНО)
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID, # Здесь теперь должно быть корректное число
+            text=f"Бот успешно запущен. Пользователь {update.effective_user.name} ввел команду /start."
+        )
+    except Exception as e:
+        print(f"ОШИБКА УВЕДОМЛЕНИЯ АДМИНА: {e}")
+        # Если здесь будет ошибка, скорее всего, ADMIN_CHAT_ID все еще не число или неверное ID.
 
-# Обработчик всех текстовых сообщений
-async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+# Обработчик всех текстовых сообщений (пока только echo)
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Основной обработчик для модерации и автоответов.
+    """
+    # Здесь в будущем будет логика проверки:
+    # 1. Сначала: Проверка на капс, злоумышленников (п. 2, 4 ТЗ)
+    # 2. Затем: Проверка на FAQ (п. 3 ТЗ)
+    
+    # Пока что просто отвечает эхом
     await update.message.reply_text(f"Я получил твое сообщение: '{update.message.text}'")
+
 
 # --- РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ ---
 application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+# Обработчик сообщений, включая все текстовые, которые не являются командами
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)) 
 
 
 # --- WEB-СЕРВЕР ---
-
-@app.on_event("startup")
-def on_startup():
-    # Вызываем создание таблиц при запуске (только при первом развертывании)
-    initialize_db()
 
 @app.post("/api/webhook")
 async def webhook(request: Request):
@@ -92,4 +111,5 @@ async def webhook(request: Request):
 
 @app.get("/")
 def health_check():
-    return {"status": "Bot is alive and connected to DB!"}
+    # Теперь здесь не нужно ничего вызывать. Проверка подключения произошла при запуске.
+    return {"status": "Bot is alive and ready for action!"}
