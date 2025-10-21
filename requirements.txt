@@ -4,5 +4,6 @@ uvicorn
 python-dotenv
 sqlalchemy
 psycopg2-binary
-transformers  # <--- НОВАЯ БИБЛИОТЕКА
-torch         # <--- НОВАЯ БИБЛИОТЕКА
+transformers
+torch
+google-genai # <--- НОВАЯ БИБЛИОТЕКА
