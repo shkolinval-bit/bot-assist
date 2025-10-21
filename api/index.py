@@ -18,8 +18,7 @@ from sqlalchemy.exc import OperationalError
 try:
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     bot = application.bot  # Можно получить бота из 'application', если он нужен отдельно
-    print("INFO: Application (v20+)
-     инициализирован.")
+    print("INFO: Application (v20+) инициализирован.")
 except Exception as e:
     print(f"ERROR: Не удалось создать Application: {e}")
     # Если приложение не создалось, FastAPI все равно должен запуститься, 
